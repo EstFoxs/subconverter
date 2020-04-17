@@ -28,8 +28,9 @@ const string_array clashr_obfs = {"plain", "http_simple", "http_post", "tls1.2_t
 /// rule type lists
 #define basic_types "DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "IP-CIDR", "SRC-IP-CIDR", "GEOIP", "MATCH", "FINAL"
 const string_array clash_rule_type = {basic_types, "IP-CIDR6", "SRC-PORT", "DST-PORT"};
+const string_array surge2_rule_type = {basic_types, "IP-CIDR6", "USER-AGENT", "URL-REGEX", "PROCESS-NAME", "IN-PORT", "DEST-PORT", "SRC-IP"};
 const string_array surge_rule_type = {basic_types, "IP-CIDR6", "USER-AGENT", "URL-REGEX", "AND", "OR", "NOT", "PROCESS-NAME", "IN-PORT", "DEST-PORT", "SRC-IP"};
-const string_array quanx_rule_type = {basic_types, "USER-AGENT", "URL-REGEX", "PROCESS-NAME", "HOST", "HOST-SUFFIX", "HOST-KEYWORD"};
+const string_array quanx_rule_type = {basic_types, "USER-AGENT", "HOST", "HOST-SUFFIX", "HOST-KEYWORD"};
 const string_array surfb_rule_type = {basic_types, "IP-CIDR6", "PROCESS-NAME", "IN-PORT", "DEST-PORT", "SRC-IP"};
 
 template <typename T> T safe_as (const YAML::Node& node)
@@ -582,7 +583,6 @@ void rulesetToSurge(INIReader &base_rule, std::vector<ruleset_content> &ruleset_
         }
     }
 
-
     const std::string rule_match_regex = "^(.*?,.*?)(,.*)(,.*)$";
 
     for(ruleset_content &x : ruleset_content_array)
@@ -613,7 +613,29 @@ void rulesetToSurge(INIReader &base_rule, std::vector<ruleset_content> &ruleset_
         }
         else
         {
-            if(!fileExist(rule_path))
+            if(fileExist(rule_path))
+            {
+                if(surge_ver > 2 && remote_path_prefix.size())
+                {
+                    strLine = "RULE-SET," + remote_path_prefix + "/getruleset?type=1&url=" + urlsafe_base64_encode(rule_path) + "," + rule_group;
+                    allRules.emplace_back(strLine);
+                    continue;
+                }
+                else if(surge_ver == -1 && remote_path_prefix.size())
+                {
+                    strLine = remote_path_prefix + "/getruleset?type=2&url=" + urlsafe_base64_encode(rule_path) + "&group=" + urlsafe_base64_encode(rule_group);
+                    strLine += ", tag=" + rule_group + ", enabled=true";
+                    base_rule.Set("filter_remote", "{NONAME}", strLine);
+                    continue;
+                }
+                else if(surge_ver == -4 && remote_path_prefix.size())
+                {
+                    strLine = remote_path_prefix + "/getruleset?type=1&url=" + urlsafe_base64_encode(rule_path) + "," + rule_group;
+                    base_rule.Set("Remote Rule", "{NONAME}", strLine);
+                    continue;
+                }
+            }
+            else if(startsWith(rule_path, "https://") || startsWith(rule_path, "http://") || startsWith(rule_path, "data:"))
             {
                 if(surge_ver > 2)
                 {
@@ -636,27 +658,7 @@ void rulesetToSurge(INIReader &base_rule, std::vector<ruleset_content> &ruleset_
                 }
             }
             else
-            {
-                if(surge_ver > 2 && remote_path_prefix.size())
-                {
-                    strLine = "RULE-SET," + remote_path_prefix + "/getruleset?type=1&url=" + urlsafe_base64_encode(rule_path) + "," + rule_group;
-                    allRules.emplace_back(strLine);
-                    continue;
-                }
-                else if(surge_ver == -1 && remote_path_prefix.size())
-                {
-                    strLine = remote_path_prefix + "/getruleset?type=2&url=" + urlsafe_base64_encode(rule_path) + "&group=" + urlsafe_base64_encode(rule_group);
-                    strLine += ", tag=" + rule_group + ", enabled=true";
-                    base_rule.Set("filter_remote", "{NONAME}", strLine);
-                    continue;
-                }
-                else if(surge_ver == -4 && remote_path_prefix.size())
-                {
-                    strLine = remote_path_prefix + "/getruleset?type=1&url=" + urlsafe_base64_encode(rule_path) + "," + rule_group;
-                    base_rule.Set("Remote Rule", "{NONAME}", strLine);
-                    continue;
-                }
-            }
+                continue;
             retrived_rules = x.rule_content.get();
             if(retrived_rules.empty())
             {
@@ -688,12 +690,29 @@ void rulesetToSurge(INIReader &base_rule, std::vector<ruleset_content> &ruleset_
                     continue;
 
                 /// remove unsupported types
-                if((surge_ver == -1 || surge_ver == -2) && !std::any_of(quanx_rule_type.begin(), quanx_rule_type.end(), [strLine](std::string type){return startsWith(strLine, type);}))
-                    continue;
-                else if(surge_ver == -3 && !std::any_of(surfb_rule_type.begin(), surfb_rule_type.end(), [strLine](std::string type){return startsWith(strLine, type);}))
-                    continue;
-                else if(!std::any_of(surge_rule_type.begin(), surge_rule_type.end(), [strLine](std::string type){return startsWith(strLine, type);}))
-                    continue;
+                switch(surge_ver)
+                {
+                case -1:
+                case -2:
+                    if(!std::any_of(quanx_rule_type.begin(), quanx_rule_type.end(), [strLine](std::string type){return startsWith(strLine, type);}) || startsWith(strLine, "IP-CIDR6"))
+                        continue;
+                    break;
+                case -3:
+                    if(!std::any_of(surfb_rule_type.begin(), surfb_rule_type.end(), [strLine](std::string type){return startsWith(strLine, type);}))
+                        continue;
+                    break;
+                default:
+                    if(surge_ver > 2)
+                    {
+                        if(!std::any_of(surge_rule_type.begin(), surge_rule_type.end(), [strLine](std::string type){return startsWith(strLine, type);}))
+                            continue;
+                    }
+                    else
+                    {
+                        if(!std::any_of(surge2_rule_type.begin(), surge2_rule_type.end(), [strLine](std::string type){return startsWith(strLine, type);}))
+                            continue;
+                    }
+                }
 
                 strLine += "," + rule_group;
                 if(surge_ver == -1 || surge_ver == -2)
@@ -1036,6 +1055,7 @@ void netchToClash(std::vector<nodeInfo> &nodes, YAML::Node &yamlnode, string_arr
         switch(hash_(vArray[1]))
         {
         case "select"_hash:
+        case "relay"_hash:
             break;
         case "url-test"_hash:
         case "fallback"_hash:
@@ -1298,9 +1318,12 @@ std::string netchToSurge(std::vector<nodeInfo> &nodes, std::string &base_conf, s
         {
         case "select"_hash:
             break;
+        case "load-balance"_hash:
+            if(surge_ver < 1)
+                continue;
+            [[fallthrough]];
         case "url-test"_hash:
         case "fallback"_hash:
-        case "load-balance"_hash:
             if(rules_upper_bound < 5)
                 continue;
             rules_upper_bound -= 2;
@@ -1889,13 +1912,13 @@ void netchToQuan(std::vector<nodeInfo> &nodes, INIReader &ini, std::vector<rules
         if(!filtered_nodelist.size())
             filtered_nodelist.emplace_back("direct");
 
+        if(filtered_nodelist.size() < 2) // force groups with 1 node to be static
+            type = "static";
+
         proxies = std::accumulate(std::next(filtered_nodelist.begin()), filtered_nodelist.end(), filtered_nodelist[0], [](std::string a, std::string b)
         {
             return std::move(a) + "\n" + std::move(b);
         });
-
-        if(filtered_nodelist.size() < 2) // force groups with 1 node to be static
-            type = "static";
 
         singlegroup = name + " : " + type;
         if(type == "static")
@@ -2099,6 +2122,9 @@ void netchToQuanX(std::vector<nodeInfo> &nodes, INIReader &ini, std::vector<rule
         if(!filtered_nodelist.size())
             filtered_nodelist.emplace_back("direct");
 
+        if(filtered_nodelist.size() < 2) // force groups with 1 node to be static
+            type = "static";
+
         auto iter = std::find_if(original_groups.begin(), original_groups.end(), [name](const string_multimap::value_type &n)
         {
             std::string groupdata = n.second;
@@ -2117,9 +2143,6 @@ void netchToQuanX(std::vector<nodeInfo> &nodes, INIReader &ini, std::vector<rule
                     filtered_nodelist.emplace_back(trim(vArray[vArray.size() - 1]));
             }
         }
-
-        if(filtered_nodelist.size() < 2) // force groups with 1 node to be static
-            type = "static";
 
         proxies = std::accumulate(std::next(filtered_nodelist.begin()), filtered_nodelist.end(), filtered_nodelist[0], [](std::string a, std::string b)
         {
@@ -2653,114 +2676,4 @@ std::string netchToLoon(std::vector<nodeInfo> &nodes, std::string &base_conf, st
         rulesetToSurge(ini, ruleset_content_array, -4, ext.overwrite_original_rules, ext.managed_config_prefix);
 
     return ini.ToString();
-}
-
-std::string buildGistData(std::string name, std::string content)
-{
-    rapidjson::StringBuffer sb;
-    rapidjson::Writer<rapidjson::StringBuffer> writer(sb);
-    writer.StartObject();
-    writer.Key("description");
-    writer.String("subconverter");
-    writer.Key("public");
-    writer.Bool(false);
-    writer.Key("files");
-    writer.StartObject();
-    writer.Key(name.data());
-    writer.StartObject();
-    writer.Key("content");
-    writer.String(content.data());
-    writer.EndObject();
-    writer.EndObject();
-    writer.EndObject();
-    return sb.GetString();
-}
-
-int uploadGist(std::string name, std::string path, std::string content, bool writeManageURL)
-{
-    INIReader ini;
-    rapidjson::Document json;
-    std::string token, id, username, retData, url;
-    int retVal = 0;
-
-    if(!fileExist("gistconf.ini"))
-    {
-        //std::cerr<<"gistconf.ini not found. Skipping...\n";
-        writeLog(0, "gistconf.ini not found. Skipping...", LOG_LEVEL_ERROR);
-        return -1;
-    }
-
-    ini.ParseFile("gistconf.ini");
-    if(ini.EnterSection("common") != 0)
-    {
-        //std::cerr<<"gistconf.ini has incorrect format. Skipping...\n";
-        writeLog(0, "gistconf.ini has incorrect format. Skipping...", LOG_LEVEL_ERROR);
-        return -1;
-    }
-
-    token = ini.Get("token");
-    if(!token.size())
-    {
-        //std::cerr<<"No token is provided. Skipping...\n";
-        writeLog(0, "No token is provided. Skipping...", LOG_LEVEL_ERROR);
-        return -1;
-    }
-
-    id = ini.Get("id");
-    username = ini.Get("username");
-    if(!path.size())
-    {
-        if(ini.ItemExist("path"))
-            path = ini.Get(name, "path");
-        else
-            path = name;
-    }
-
-    if(!id.size())
-    {
-        //std::cerr<<"No gist id is provided. Creating new gist...\n";
-        writeLog(0, "No Gist id is provided. Creating new Gist...", LOG_LEVEL_ERROR);
-        retVal = webPost("https://api.github.com/gists", buildGistData(path, content), getSystemProxy(), token, &retData);
-        if(retVal != 201)
-        {
-            //std::cerr<<"Create new Gist failed! Return data:\n"<<retData<<"\n";
-            writeLog(0, "Create new Gist failed! Return data:\n" + retData, LOG_LEVEL_ERROR);
-            return -1;
-        }
-    }
-    else
-    {
-        url = "https://gist.githubusercontent.com/" + username + "/" + id + "/raw/" + path;
-        //std::cerr<<"Gist id provided. Modifying Gist...\n";
-        writeLog(0, "Gist id provided. Modifying Gist...", LOG_LEVEL_INFO);
-        if(writeManageURL)
-            content = "#!MANAGED-CONFIG " + url + "\n" + content;
-        retVal = webPatch("https://api.github.com/gists/" + id, buildGistData(path, content), getSystemProxy(), token, &retData);
-        if(retVal != 200)
-        {
-            //std::cerr<<"Modify gist failed! Return data:\n"<<retData<<"\n";
-            writeLog(0, "Modify Gist failed! Return data:\n" + retData, LOG_LEVEL_ERROR);
-            return -1;
-        }
-    }
-    json.Parse(retData.data());
-    GetMember(json, "id", id);
-    if(json.HasMember("owner"))
-        GetMember(json["owner"], "login", username);
-    url = "https://gist.githubusercontent.com/" + username + "/" + id + "/raw/" + path;
-    //std::cerr<<"Writing to Gist success!\nGenerator: "<<name<<"\nPath: "<<path<<"\nRaw URL: "<<url<<"\nGist owner: "<<username<<"\n";
-    writeLog(0, "Writing to Gist success!\nGenerator: " + name + "\nPath: " + path + "\nRaw URL: " + url + "\nGist owner: " + username, LOG_LEVEL_INFO);
-
-    ini.EraseSection();
-    ini.Set("token", token);
-    ini.Set("id", id);
-    ini.Set("username", username);
-
-    ini.SetCurrentSection(path);
-    ini.EraseSection();
-    ini.Set("type", name);
-    ini.Set("url", url);
-
-    ini.ToFile("gistconf.ini");
-    return 0;
 }

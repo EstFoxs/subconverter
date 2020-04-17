@@ -18,9 +18,10 @@
 #include "logger.h"
 #include "string_hash.h"
 #include "templates.h"
+#include "upload.h"
 
 //common settings
-std::string pref_path = "pref.ini";
+std::string pref_path = "pref.ini", def_ext_config;
 string_array def_exclude_remarks, def_include_remarks, rulesets, stream_rules, time_rules;
 std::vector<ruleset_content> ruleset_content_array;
 std::string listen_address = "127.0.0.1", default_url, insert_url, managed_config_prefix;
@@ -90,7 +91,7 @@ std::string parseProxy(const std::string &source)
 
 #define basic_types "DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "IP-CIDR", "SRC-IP-CIDR", "GEOIP", "MATCH", "FINAL"
 const string_array surge_rule_type = {basic_types, "IP-CIDR6", "USER-AGENT", "URL-REGEX", "AND", "OR", "NOT", "PROCESS-NAME", "IN-PORT", "DEST-PORT", "SRC-IP"};
-const string_array quanx_rule_type = {basic_types, "USER-AGENT", "URL-REGEX", "PROCESS-NAME", "HOST", "HOST-SUFFIX", "HOST-KEYWORD"};
+const string_array quanx_rule_type = {basic_types, "USER-AGENT", "HOST", "HOST-SUFFIX", "HOST-KEYWORD"};
 
 std::string getRuleset(RESPONSE_CALLBACK_ARGS)
 {
@@ -125,9 +126,12 @@ std::string getRuleset(RESPONSE_CALLBACK_ARGS)
 
     while(getline(ss, strLine, delimiter))
     {
-        if(type_int == 2 && !std::any_of(quanx_rule_type.begin(), quanx_rule_type.end(), [strLine](std::string type){return startsWith(strLine, type);}))
-            continue;
-        else if(!std::any_of(surge_rule_type.begin(), surge_rule_type.end(), [strLine](std::string type){return startsWith(strLine, type);}))
+        if(type_int == 2)
+        {
+            if(!std::any_of(quanx_rule_type.begin(), quanx_rule_type.end(), [&strLine](std::string type){return startsWith(strLine, type);}) || startsWith(strLine, "IP-CIDR6"))
+                continue;
+        }
+        else if(!std::any_of(surge_rule_type.begin(), surge_rule_type.end(), [&strLine](std::string type){return startsWith(strLine, type);}))
             continue;
 
         lineSize = strLine.size();
@@ -175,8 +179,10 @@ int importItems(string_array &target, bool scope_limit = true)
 
         if(fileExist(path))
             content = fileGet(path, scope_limit);
-        else
+        else if(startsWith(path, "http://") || startsWith(path, "https://") || startsWith(path, "data:"))
             content = webGet(path, proxy, dummy, cache_config);
+        else
+            writeLog(0, "File not found or not a valid URL: " + path, LOG_LEVEL_ERROR);
         if(!content.size())
             return -1;
 
@@ -440,6 +446,7 @@ void readYAMLConf(YAML::Node &node)
     section["loon_rule_base"] >> loon_rule_base;
     section["sssub_rule_base"] >> sssub_rule_base;
 
+    section["default_external_config"] >> def_ext_config;
     section["append_proxy_type"] >> append_proxy_type;
     section["proxy_config"] >> proxy_config;
     section["proxy_ruleset"] >> proxy_ruleset;
@@ -654,6 +661,7 @@ void readConf()
     ini.GetIfExist("quan_rule_base", quan_rule_base);
     ini.GetIfExist("quanx_rule_base", quanx_rule_base);
     ini.GetIfExist("loon_rule_base", loon_rule_base);
+    ini.GetIfExist("default_external_config", def_ext_config);
     ini.GetBoolIfExist("append_proxy_type", append_proxy_type);
     ini.GetIfExist("proxy_config", proxy_config);
     ini.GetIfExist("proxy_ruleset", proxy_ruleset);
@@ -757,6 +765,7 @@ void readConf()
             continue;
         global_vars[x.first] = x.second;
     }
+    global_vars["managed_config_prefix"] = managed_config_prefix;
 
     ini.EnterSection("server");
     ini.GetIfExist("listen", listen_address);
@@ -831,7 +840,7 @@ struct ExternalConfig
     string_array emoji;
     string_array include;
     string_array exclude;
-    string_map template_args;
+    template_args *tpl_args = NULL;
     bool overwrite_original_rules = false;
     bool enable_rule_generator = true;
 };
@@ -866,14 +875,14 @@ int loadExternalYAML(YAML::Node &node, ExternalConfig &ext)
     section["include_remarks"] >> ext.include;
     section["exclude_remarks"] >> ext.exclude;
 
-    if(node["template_args"].IsSequence())
+    if(node["template_args"].IsSequence() && ext.tpl_args != NULL)
     {
         std::string key, value;
         for(size_t i = 0; i < node["template_args"].size(); i++)
         {
             node["template_args"][i]["key"] >> key;
             node["template_args"][i]["value"] >> value;
-            ext.template_args[key] = value;
+            ext.tpl_args->local_vars[key] = value;
         }
     }
 
@@ -882,9 +891,9 @@ int loadExternalYAML(YAML::Node &node, ExternalConfig &ext)
 
 int loadExternalConfig(std::string &path, ExternalConfig &ext)
 {
-    std::string base_content, dummy;
-    std::string proxy = parseProxy(proxy_config);
-    base_content = fetchFile(path, proxy, cache_config);
+    std::string base_content, dummy, proxy = parseProxy(proxy_config), config = fetchFile(path, proxy, cache_config);
+    if(render_template(config, *ext.tpl_args, base_content, template_path) != 0)
+        base_content = config;
 
     try
     {
@@ -946,13 +955,13 @@ int loadExternalConfig(std::string &path, ExternalConfig &ext)
     if(ini.ItemPrefixExist("exclude_remarks"))
         ini.GetAll("exclude_remarks", ext.exclude);
 
-    if(ini.SectionExist("template"))
+    if(ini.SectionExist("template") && ext.tpl_args != NULL)
     {
         ini.EnterSection("template");
         string_multimap tempmap;
         ini.GetItems(tempmap);
         for(auto &x : tempmap)
-            ext.template_args[x.first] = x.second;
+            ext.tpl_args->local_vars[x.first] = x.second;
     }
 
     return 0;
@@ -1035,6 +1044,8 @@ std::string subconverter(RESPONSE_CALLBACK_ARGS)
         pos = x.find("=");
         if(pos == x.npos)
             continue;
+        if(x.substr(0, pos) == "token")
+            continue;
         req_arg_map[x.substr(0, pos)] = x.substr(pos + 1);
     }
 
@@ -1085,6 +1096,8 @@ std::string subconverter(RESPONSE_CALLBACK_ARGS)
         ext.managed_config_prefix = managed_config_prefix;
 
     //load external configuration
+    if(config.empty())
+        config = def_ext_config;
     if(config.size())
     {
         //std::cerr<<"External configuration file provided. Loading...\n";
@@ -1094,6 +1107,7 @@ std::string subconverter(RESPONSE_CALLBACK_ARGS)
         extra_ruleset = rulesets;
         //then load external configuration
         ExternalConfig extconf;
+        extconf.tpl_args = &tpl_args;
         loadExternalConfig(config, extconf);
         if(!ext.nodelist)
         {
@@ -1118,8 +1132,6 @@ std::string subconverter(RESPONSE_CALLBACK_ARGS)
             ext.rename_array = extconf.rename;
         if(extconf.emoji.size())
             ext.emoji_array = extconf.emoji;
-        if(extconf.template_args.size())
-            tpl_args.local_vars = extconf.template_args;
         ext.enable_rule_generator = extconf.enable_rule_generator;
         //load custom group
         if(extconf.custom_proxy_group.size())
@@ -1230,6 +1242,9 @@ std::string subconverter(RESPONSE_CALLBACK_ARGS)
 
     string_array dummy_group;
     std::vector<ruleset_content> dummy_ruleset;
+    std::string managed_url = base64_decode(UrlDecode(getUrlArg(argument, "profile_data")));
+    if(managed_url.empty())
+        managed_url = managed_config_prefix + "/sub?" + argument;
 
     //std::cerr<<"Generate target: ";
     int surge_ver;
@@ -1292,7 +1307,7 @@ std::string subconverter(RESPONSE_CALLBACK_ARGS)
                 uploadGist("surge" + version, upload_path, output_content, true);
 
             if(write_managed_config && managed_config_prefix.size())
-                output_content = "#!MANAGED-CONFIG " + managed_config_prefix + "/sub?" + argument + (interval ? " interval=" + std::to_string(interval) : "") \
+                output_content = "#!MANAGED-CONFIG " + managed_url + (interval ? " interval=" + std::to_string(interval) : "") \
                  + " strict=" + std::string(strict ? "true" : "false") + "\n\n" + output_content;
         }
         break;
@@ -1311,7 +1326,7 @@ std::string subconverter(RESPONSE_CALLBACK_ARGS)
             uploadGist("surfboard", upload_path, output_content, true);
 
         if(write_managed_config && managed_config_prefix.size())
-            output_content = "#!MANAGED-CONFIG " + managed_config_prefix + "/sub?" + argument + (interval ? " interval=" + std::to_string(interval) : "") \
+            output_content = "#!MANAGED-CONFIG " + managed_url + (interval ? " interval=" + std::to_string(interval) : "") \
                  + " strict=" + std::string(strict ? "true" : "false") + "\n\n" + output_content;
         break;
     case "mellow"_hash:
@@ -1567,6 +1582,7 @@ std::string surgeConfToClash(RESPONSE_CALLBACK_ARGS)
         *status_code = 400;
         return "Please insert your subscription link instead of clicking the default link.";
     }
+    writeLog(0, "SurgeConfToClash called with url '" + url + "'.", LOG_LEVEL_INFO);
 
     std::string proxy = parseProxy(proxy_config);
     YAML::Node clash;
@@ -1745,6 +1761,7 @@ std::string surgeConfToClash(RESPONSE_CALLBACK_ARGS)
     }
     clash[rule_name] = rule;
 
+    writeLog(0, "Conversion completed.", LOG_LEVEL_INFO);
     return YAML::Dump(clash);
 }
 
@@ -1801,27 +1818,14 @@ std::string getProfile(RESPONSE_CALLBACK_ARGS)
         }
     }
 
-    string_map sub_args;
-    for(auto &x : contents)
-    {
-        sub_args[x.first] = x.second;
-    }
-    string_array args = split(argument, "&");
-    string_size pos;
-    for(std::string &x : args)
-    {
-        pos = x.find("=");
-        if(pos == x.npos)
-            continue;
-        sub_args[x.substr(0, pos)] = UrlDecode(x.substr(pos + 1));
-    }
-    sub_args["token"] = token;
+    contents.emplace("token", token);
+    contents.emplace("profile_data", base64_encode(managed_config_prefix + "/getprofile?" + argument));
     std::string query;
-    for(auto &x : sub_args)
+    for(auto &x : contents)
     {
         query += x.first + "=" + UrlEncode(x.second) + "&";
     }
-    query.erase(query.size() - 1);
+    query += argument;
     return subconverter(query, postdata, status_code, extra_headers);
 }
 
@@ -1917,12 +1921,14 @@ std::string parseHostname(inja::Arguments &args)
 std::string template_webGet(inja::Arguments &args)
 {
     std::string data = args.at(0)->get<std::string>(), proxy = parseProxy(proxy_config);
+    writeLog(0, "Template called fetch with url '" + data + "'.", LOG_LEVEL_INFO);
     return webGet(data, proxy, cache_config);
 }
 
 std::string jinja2_webGet(const std::string &url)
 {
     std::string proxy = parseProxy(proxy_config);
+    writeLog(0, "Template called fetch with url '" + url + "'.", LOG_LEVEL_INFO);
     return webGet(url, proxy, cache_config);
 }
 
@@ -2092,4 +2098,53 @@ int simpleGenerator()
     //std::cerr<<"All artifact generated. Exiting...\n";
     writeLog(0, "All artifact generated. Exiting...", LOG_LEVEL_INFO);
     return 0;
+}
+
+std::string renderTemplate(RESPONSE_CALLBACK_ARGS)
+{
+    std::string path = UrlDecode(getUrlArg(argument, "path"));
+    writeLog(0, "Trying to render template '" + path + "'...", LOG_LEVEL_INFO);
+
+    if(path.find(template_path) != 0)
+    {
+        *status_code = 403;
+        return "Out of scope";
+    }
+    if(!fileExist(path))
+    {
+        *status_code = 404;
+        return "Not found";
+    }
+    std::string template_content = fetchFile(path, parseProxy(proxy_config), cache_config);
+    if(template_content.empty())
+    {
+        *status_code = 400;
+        return "File empty or out of scope";
+    }
+    template_args tpl_args;
+    tpl_args.global_vars = global_vars;
+
+    //load request arguments as template variables
+    string_array req_args = split(argument, "&");
+    string_size pos;
+    string_map req_arg_map;
+    for(std::string &x : req_args)
+    {
+        pos = x.find("=");
+        if(pos == x.npos)
+            continue;
+        req_arg_map[x.substr(0, pos)] = x.substr(pos + 1);
+    }
+    tpl_args.request_params = req_arg_map;
+
+    std::string output_content;
+    if(render_template(template_content, tpl_args, output_content, template_path) != 0)
+    {
+        *status_code = 400;
+        writeLog(0, "Render failed with error.", LOG_LEVEL_WARNING);
+    }
+    else
+        writeLog(0, "Render completed.", LOG_LEVEL_INFO);
+
+    return output_content;
 }

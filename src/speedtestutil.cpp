@@ -733,7 +733,7 @@ void explodeHTTPSub(std::string link, const std::string &custom_port, nodeInfo &
 
 void explodeTrojan(std::string trojan, const std::string &custom_port, int local_port, nodeInfo &node)
 {
-    std::string server, port, psk, addition, remark;
+    std::string server, port, psk, addition, remark, host;
     string_array vArray;
     trojan.erase(0, 9);
     string_size pos = trojan.rfind("#");
@@ -759,15 +759,19 @@ void explodeTrojan(std::string trojan, const std::string &custom_port, int local
     server = vArray[1];
     port = custom_port.empty() ? vArray[2] : custom_port;
 
+    host = getUrlArg(addition, "peer");
+
     if(remark.empty())
         remark = server + ":" + port;
+    if(host.empty() && !isIPv4(server) && !isIPv6(server))
+        host = server;
 
     node.linkType = SPEEDTEST_MESSAGE_FOUNDTROJAN;
     node.group = TROJAN_DEFAULT_GROUP;
     node.remarks = remark;
     node.server = server;
     node.port = to_int(port, 0);
-    node.proxyStr = trojanConstruct(remark, server, port, psk, "", false);
+    node.proxyStr = trojanConstruct(remark, server, port, psk, host, true);
 }
 
 void explodeQuan(std::string quan, const std::string &custom_port, int local_port, nodeInfo &node)
@@ -1211,7 +1215,8 @@ bool explodeSurge(std::string surge, const std::string &custom_port, int local_p
     ini.SetIsolatedItemsSection("Proxy");
     ini.IncludeSection("Proxy");
     ini.AddDirectSaveSection("Proxy");
-    surge = regReplace(surge, "^#!.*$\\r?\\n", "");
+    if(surge.find("[Proxy]") != surge.npos)
+        surge = regReplace(surge, "^[\\S\\s]*?\\[", "[");
     ini.Parse(surge);
 
     if(!ini.SectionExist("Proxy"))
