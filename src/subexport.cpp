@@ -9,6 +9,7 @@
 #include "socket.h"
 #include "string_hash.h"
 #include "logger.h"
+#include "templates.h"
 
 #include <algorithm>
 #include <iostream>
@@ -75,7 +76,7 @@ std::string hostnameToIPAddr(const std::string &host)
     return retAddr;
 }
 
-std::string vmessConstruct(std::string add, std::string port, std::string type, std::string id, std::string aid, std::string net, std::string cipher, std::string path, std::string host, std::string edge, std::string tls, int local_port)
+std::string vmessConstruct(std::string add, std::string port, std::string type, std::string id, std::string aid, std::string net, std::string cipher, std::string path, std::string host, std::string edge, std::string tls)
 {
     if(!path.size())
         path = "/";
@@ -96,7 +97,7 @@ std::string vmessConstruct(std::string add, std::string port, std::string type, 
     writer.Key("Hostname");
     writer.String(add.data());
     writer.Key("Port");
-    writer.Int(shortAssemble((unsigned short)to_int(port), (unsigned short)local_port));
+    writer.Int(to_int(port));
     writer.Key("UserID");
     writer.String(id.data());
     writer.Key("AlterID");
@@ -132,7 +133,7 @@ std::string vmessConstruct(std::string add, std::string port, std::string type, 
     return sb.GetString();
 }
 
-std::string ssrConstruct(std::string group, std::string remarks, std::string remarks_base64, std::string server, std::string port, std::string protocol, std::string method, std::string obfs, std::string password, std::string obfsparam, std::string protoparam, int local_port, bool libev)
+std::string ssrConstruct(std::string group, std::string remarks, std::string remarks_base64, std::string server, std::string port, std::string protocol, std::string method, std::string obfs, std::string password, std::string obfsparam, std::string protoparam, bool libev)
 {
     rapidjson::StringBuffer sb;
     rapidjson::Writer<rapidjson::StringBuffer> writer(sb);
@@ -144,7 +145,7 @@ std::string ssrConstruct(std::string group, std::string remarks, std::string rem
     writer.Key("Hostname");
     writer.String(server.data());
     writer.Key("Port");
-    writer.Int(shortAssemble((unsigned short)to_int(port), (unsigned short)local_port));
+    writer.Int(to_int(port));
     writer.Key("Password");
     writer.String(password.data());
     writer.Key("EncryptMethod");
@@ -161,7 +162,7 @@ std::string ssrConstruct(std::string group, std::string remarks, std::string rem
     return sb.GetString();
 }
 
-std::string ssConstruct(std::string server, std::string port, std::string password, std::string method, std::string plugin, std::string pluginopts, std::string remarks, int local_port, bool libev)
+std::string ssConstruct(std::string server, std::string port, std::string password, std::string method, std::string plugin, std::string pluginopts, std::string remarks, bool libev)
 {
     rapidjson::StringBuffer sb;
     rapidjson::Writer<rapidjson::StringBuffer> writer(sb);
@@ -173,7 +174,7 @@ std::string ssConstruct(std::string server, std::string port, std::string passwo
     writer.Key("Hostname");
     writer.String(server.data());
     writer.Key("Port");
-    writer.Int(shortAssemble((unsigned short)to_int(port), (unsigned short)local_port));
+    writer.Int(to_int(port));
     writer.Key("Password");
     writer.String(password.data());
     writer.Key("EncryptMethod");
@@ -251,6 +252,29 @@ std::string trojanConstruct(std::string remarks, std::string server, std::string
     return sb.GetString();
 }
 
+std::string snellConstruct(std::string remarks, std::string server, std::string port, std::string password, std::string obfs, std::string host)
+{
+    rapidjson::StringBuffer sb;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(sb);
+    writer.StartObject();
+    writer.Key("Type");
+    writer.String("Snell");
+    writer.Key("Remark");
+    writer.String(remarks.data());
+    writer.Key("Hostname");
+    writer.String(server.data());
+    writer.Key("Port");
+    writer.Int(to_int(port));
+    writer.Key("Password");
+    writer.String(password.data());
+    writer.Key("OBFS");
+    writer.String(obfs.data());
+    writer.Key("Host");
+    writer.String(host.data());
+    writer.EndObject();
+    return sb.GetString();
+}
+
 std::string vmessLinkConstruct(std::string remarks, std::string add, std::string port, std::string type, std::string id, std::string aid, std::string net, std::string path, std::string host, std::string tls)
 {
     rapidjson::StringBuffer sb;
@@ -287,7 +311,7 @@ bool matchRange(std::string &range, int target)
     string_array vArray = split(range, ",");
     bool match = false;
     int range_begin = 0, range_end = 0;
-    const std::string reg_num = "\\d+", reg_range = "(\\d+)-(\\d+)", reg_not = "\\!(\\d+)", reg_not_range = "\\!(\\d+)-(\\d+)", reg_less = "(\\d+)-", reg_more = "(\\d+)\\+";
+    const std::string reg_num = "-?\\d+", reg_range = "(\\d+)-(\\d+)", reg_not = "\\!(\\d+)", reg_not_range = "\\!(\\d+)-(\\d+)", reg_less = "(\\d+)-", reg_more = "(\\d+)\\+";
     for(std::string &x : vArray)
     {
         if(regMatch(x, reg_num))
@@ -404,6 +428,18 @@ std::string addEmoji(std::string remark, int groupID, const string_array &emoji_
         }
     }
     return remark;
+}
+
+void processRemark(std::string &oldremark, std::string &newremark, string_array &remarks_list)
+{
+    newremark = oldremark;
+    int cnt = 2;
+    while(std::find(remarks_list.begin(), remarks_list.end(), newremark) != remarks_list.end())
+    {
+        newremark = oldremark + " " + std::to_string(cnt);
+        cnt++;
+    }
+    oldremark = newremark;
 }
 
 void rulesetToClash(YAML::Node &base_rule, std::vector<ruleset_content> &ruleset_content_array, bool overwrite_original_rules, bool new_field_name)
@@ -551,7 +587,7 @@ std::string rulesetToClashStr(YAML::Node &base_rule, std::vector<ruleset_content
 void rulesetToSurge(INIReader &base_rule, std::vector<ruleset_content> &ruleset_content_array, int surge_ver, bool overwrite_original_rules, std::string remote_path_prefix)
 {
     string_array allRules;
-    std::string rule_group, rule_path, retrived_rules, strLine;
+    std::string rule_group, rule_path, retrieved_rules, strLine;
     std::stringstream strStrm;
 
     switch(surge_ver) //other version: -3 for Surfboard, -4 for Loon
@@ -659,17 +695,17 @@ void rulesetToSurge(INIReader &base_rule, std::vector<ruleset_content> &ruleset_
             }
             else
                 continue;
-            retrived_rules = x.rule_content.get();
-            if(retrived_rules.empty())
+            retrieved_rules = x.rule_content.get();
+            if(retrieved_rules.empty())
             {
                 writeLog(0, "Failed to fetch ruleset or ruleset is empty: '" + x.rule_path + "'!", LOG_LEVEL_WARNING);
                 continue;
             }
 
-            char delimiter = count(retrived_rules.begin(), retrived_rules.end(), '\n') < 1 ? '\r' : '\n';
+            char delimiter = count(retrieved_rules.begin(), retrieved_rules.end(), '\n') < 1 ? '\r' : '\n';
 
             strStrm.clear();
-            strStrm<<retrived_rules;
+            strStrm<<retrieved_rules;
             std::string::size_type lineSize;
             while(getline(strStrm, strLine, delimiter))
             {
@@ -763,6 +799,7 @@ void parseGroupTimes(const std::string &src, int *interval, int *tolerance, int 
 void groupGenerate(std::string &rule, std::vector<nodeInfo> &nodelist, std::vector<std::string> &filtered_nodelist, bool add_direct)
 {
     std::string group;
+    const std::string groupid_regex = R"(^!!(?:GROUPID|INSERT)=([\d\-+!,]+)(?:!!(.*))?$)";
     if(rule.find("[]") == 0 && add_direct)
     {
         filtered_nodelist.emplace_back(rule.substr(2));
@@ -771,7 +808,7 @@ void groupGenerate(std::string &rule, std::vector<nodeInfo> &nodelist, std::vect
     {
         if(rule.find("!!", rule.find("!!") + 2) != rule.npos)
         {
-            group = rule.substr(8, rule.find("!!", rule.find("!!") + 2));
+            group = rule.substr(8, rule.find("!!", rule.find("!!") + 2) - 8);
             rule = rule.substr(rule.find("!!", rule.find("!!") + 2) + 2);
 
             for(nodeInfo &y : nodelist)
@@ -791,26 +828,24 @@ void groupGenerate(std::string &rule, std::vector<nodeInfo> &nodelist, std::vect
             }
         }
     }
-    else if(rule.find("!!GROUPID=") == 0)
+    else if(rule.find("!!GROUPID=") == 0 || rule.find("!!INSERT=") == 0)
     {
-        if(rule.find("!!", rule.find("!!") + 2) != rule.npos)
+        int dir = rule.find("!!INSERT=") == 0 ? -1 : 1;
+        group = regReplace(rule, groupid_regex, "$1");
+        rule = regReplace(rule, groupid_regex, "$2");
+        if(rule.empty())
         {
-            group = rule.substr(10, rule.find("!!", rule.find("!!") + 2) - 10);
-            rule = rule.substr(rule.find("!!", rule.find("!!") + 2) + 2);
-
             for(nodeInfo &y : nodelist)
             {
-                if(matchRange(group, y.groupID) && regFind(y.remarks, rule) && std::find(filtered_nodelist.begin(), filtered_nodelist.end(), y.remarks) == filtered_nodelist.end())
+                if(matchRange(group, dir * y.groupID) && std::find(filtered_nodelist.begin(), filtered_nodelist.end(), y.remarks) == filtered_nodelist.end())
                     filtered_nodelist.emplace_back(y.remarks);
             }
         }
         else
         {
-            group = rule.substr(10);
-
             for(nodeInfo &y : nodelist)
             {
-                if(matchRange(group, y.groupID) && std::find(filtered_nodelist.begin(), filtered_nodelist.end(), y.remarks) == filtered_nodelist.end())
+                if(matchRange(group, dir * y.groupID) && regFind(y.remarks, rule) && std::find(filtered_nodelist.begin(), filtered_nodelist.end(), y.remarks) == filtered_nodelist.end())
                     filtered_nodelist.emplace_back(y.remarks);
             }
         }
@@ -867,10 +902,8 @@ void netchToClash(std::vector<nodeInfo> &nodes, YAML::Node &yamlnode, string_arr
         if(ext.append_proxy_type)
             x.remarks = "[" + type + "] " + x.remarks;
 
-        while(std::count(remarks_list.begin(), remarks_list.end(), x.remarks) > 0)
-            x.remarks += "$";
+        processRemark(x.remarks, remark, remarks_list);
 
-        remark = x.remarks;
         hostname = GetMember(json, "Hostname");
         port = GetMember(json, "Port");
         username = GetMember(json, "Username");
@@ -1009,6 +1042,19 @@ void netchToClash(std::vector<nodeInfo> &nodes, YAML::Node &yamlnode, string_arr
             if(ext.skip_cert_verify)
                 singleproxy["skip-cert-verify"] = true;
             break;
+        case SPEEDTEST_MESSAGE_FOUNDSNELL:
+            obfs = GetMember(json, "OBFS");
+            host = GetMember(json, "Host");
+            singleproxy["type"] = "snell";
+            singleproxy["psk"] = password;
+            if(obfs.size())
+            {
+                singleproxy["obfs-opts"]["mode"] = obfs;
+                singleproxy["obfs-opts"]["host"] = host;
+            }
+            if(std::all_of(password.begin(), password.end(), ::isdigit) && !password.empty())
+                singleproxy["password"].SetTag("str");
+            break;
         default:
             continue;
         }
@@ -1126,6 +1172,12 @@ std::string netchToClash(std::vector<nodeInfo> &nodes, std::string &base_conf, s
     if(!ext.enable_rule_generator)
         return YAML::Dump(yamlnode);
 
+    if(ext.clash_script)
+    {
+        renderClashScript(yamlnode, ruleset_content_array, ext.managed_config_prefix);
+        return YAML::Dump(yamlnode);
+    }
+
     std::string output_content = rulesetToClashStr(yamlnode, ruleset_content_array, ext.overwrite_original_rules, ext.clash_new_field_name);
     output_content.insert(0, YAML::Dump(yamlnode));
 
@@ -1171,12 +1223,9 @@ std::string netchToSurge(std::vector<nodeInfo> &nodes, std::string &base_conf, s
 
         if(ext.append_proxy_type)
             x.remarks = "[" + type + "] " + x.remarks;
-        remark = x.remarks;
 
-        while(std::count(remarks_list.begin(), remarks_list.end(), x.remarks) > 0)
-            x.remarks += "$";
+        processRemark(x.remarks, remark, remarks_list);
 
-        remark = x.remarks;
         hostname = GetMember(json, "Hostname");
         port = std::to_string((unsigned short)stoi(GetMember(json, "Port")));
         username = GetMember(json, "Username");
@@ -1273,6 +1322,13 @@ std::string netchToSurge(std::vector<nodeInfo> &nodes, std::string &base_conf, s
                 proxy += ", sni=" + host;
             if(ext.skip_cert_verify)
                 proxy += ", skip-cert-verify=1";
+            break;
+        case SPEEDTEST_MESSAGE_FOUNDSNELL:
+            obfs = GetMember(json, "OBFS");
+            host = GetMember(json, "Host");
+            proxy = "snell, " + hostname + ", " + port + ", psk=" + password;
+            if(obfs.size())
+                proxy += ", obfs=" + obfs + ", obfs-host=" + host;
             break;
         default:
             continue;
@@ -1719,10 +1775,7 @@ void netchToQuan(std::vector<nodeInfo> &nodes, INIReader &ini, std::vector<rules
         if(ext.append_proxy_type)
             x.remarks = "[" + type + "] " + x.remarks;
 
-        while(std::count(remarks_list.begin(), remarks_list.end(), x.remarks) > 0)
-            x.remarks += "$";
-
-        remark = x.remarks;
+        processRemark(x.remarks, remark, remarks_list);
 
         hostname = GetMember(json, "Hostname");
         port = std::to_string((unsigned short)stoi(GetMember(json, "Port")));
@@ -1984,10 +2037,7 @@ void netchToQuanX(std::vector<nodeInfo> &nodes, INIReader &ini, std::vector<rule
         if(ext.append_proxy_type)
             x.remarks = "[" + type + "] " + x.remarks;
 
-        while(std::count(remarks_list.begin(), remarks_list.end(), x.remarks) > 0)
-            x.remarks += "$";
-
-        remark = x.remarks;
+        processRemark(x.remarks, remark, remarks_list);
 
         hostname = GetMember(json, "Hostname");
         port = std::to_string((unsigned short)stoi(GetMember(json, "Port")));
@@ -2063,6 +2113,8 @@ void netchToQuanX(std::vector<nodeInfo> &nodes, INIReader &ini, std::vector<rule
             proxyStr += ", fast-open=true";
         if(ext.udp)
             proxyStr += ", udp-relay=true";
+        if(ext.skip_cert_verify && (x.linkType == SPEEDTEST_MESSAGE_FOUNDHTTP || x.linkType == SPEEDTEST_MESSAGE_FOUNDTROJAN))
+            proxyStr += ", tls-verification=false";
         proxyStr += ", tag=" + remark;
 
         ini.Set("{NONAME}", proxyStr);
@@ -2110,6 +2162,16 @@ void netchToQuanX(std::vector<nodeInfo> &nodes, INIReader &ini, std::vector<rule
                 continue;
             rules_upper_bound -= 2;
             break;
+        case "ssid"_hash:
+            if(rules_upper_bound < 4)
+                continue;
+            proxies = vArray[0] + ",";
+            proxies += std::accumulate(vArray.begin() + 3, vArray.end(), vArray[2], [](std::string a, std::string b)
+            {
+                return std::move(a) + "," + replace_all_distinct(b, "=", ":");
+            });
+            ini.Set("{NONAME}", vArray[1] + "=" + proxies); //insert order
+            continue;
         default:
             continue;
         }
@@ -2361,10 +2423,9 @@ void netchToMellow(std::vector<nodeInfo> &nodes, INIReader &ini, std::vector<rul
 
         if(ext.append_proxy_type)
             x.remarks = "[" + type + "] " + x.remarks;
-        remark = x.remarks;
 
-        while(std::count(remarks_list.begin(), remarks_list.end(), remark) > 0)
-            remark = x.remarks = x.remarks + "$";
+        processRemark(x.remarks, remark, remarks_list);
+
         hostname = GetMember(json, "Hostname");
         port = std::to_string((unsigned short)stoi(GetMember(json, "Port")));
         username = GetMember(json, "Username");
@@ -2514,12 +2575,9 @@ std::string netchToLoon(std::vector<nodeInfo> &nodes, std::string &base_conf, st
 
         if(ext.append_proxy_type)
             x.remarks = "[" + type + "] " + x.remarks;
-        remark = x.remarks;
 
-        while(std::count(remarks_list.begin(), remarks_list.end(), x.remarks) > 0)
-            x.remarks += "$";
+        processRemark(x.remarks, remark, remarks_list);
 
-        remark = x.remarks;
         hostname = GetMember(json, "Hostname");
         port = std::to_string((unsigned short)stoi(GetMember(json, "Port")));
         username = GetMember(json, "Username");
